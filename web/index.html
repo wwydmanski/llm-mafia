@@ -45,10 +45,12 @@
       .phase .meta { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
       .phase.day { box-shadow: inset 0 0 0 1px rgba(22,163,74,.25); }
       .phase.night { box-shadow: inset 0 0 0 1px rgba(37,99,235,.25); }
-      .msg { display:grid; grid-template-columns: 56px 1fr auto; gap:10px; align-items:center; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 8px; transform: translateY(6px); opacity:0; animation: pop .25s ease forwards; }
+      .msg { display:grid; grid-template-columns: 40px 1fr auto; gap:10px; align-items:center; background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 8px; transform: translateY(6px); opacity:0; animation: pop .25s ease forwards; }
       .agent { font-weight: 600; color:#e5e7eb; display:flex; align-items:center; gap:8px; }
-      .avatar { width: 40px; height: 40px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; letter-spacing: .3px; border: 1px solid rgba(255,255,255,.06); box-shadow: 0 6px 14px rgba(0,0,0,.25) inset; }
+      .avatar { width: 32px; height: 32px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; letter-spacing: .3px; border: 1px solid rgba(255,255,255,.06); box-shadow: 0 6px 14px rgba(0,0,0,.25) inset; font-size: 12px; }
       .bubble { background: #0c1a37; border: 1px solid #0f2549; padding: 8px 10px; border-radius: 8px; }
+      .actions { opacity: 0; transition: opacity .15s ease; }
+      .msg:hover .actions { opacity: 1; }
       .chip { display:inline-flex; align-items:center; gap:6px; font-size: 11px; color: var(--muted); padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0b1324; }
       .chip .dot { width:8px; height:8px; border-radius:999px; display:inline-block; background:#475569; }
       .chip.ok .dot { background: var(--green); }
@@ -56,6 +58,9 @@
       .chip.speaking { border-color: #60a5fa; box-shadow: 0 0 0 1px rgba(96,165,250,.25), 0 0 12px rgba(96,165,250,.25) inset; color:#e2e8f0; }
       .chip .model { margin-left:6px; color:#93c5fd; opacity:.9; }
       .spinner { width: 12px; height: 12px; border: 2px solid rgba(255,255,255,.2); border-top-color: #60a5fa; border-radius: 50%; animation: spin .8s linear infinite; }
+      .chip.majority { border-color: #22c55e; box-shadow: 0 0 0 1px rgba(34,197,94,.35), 0 0 14px rgba(34,197,94,.25) inset; color:#eaffea; }
+      @keyframes blinkMajority { 0%,100% { opacity: .8 } 50% { opacity: 1 } }
+      .dead { opacity:.5; text-decoration: line-through; }
       .list { display:flex; flex-wrap: wrap; gap:6px; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; color:#93c5fd; }
       .footer { margin-top:8px; display:flex; justify-content:space-between; align-items:center; }
@@ -84,9 +89,9 @@
         'gpt-5.2': { color: '#f59e0b', emoji: '🤖' },
         'claude-4.5-opus': { color: '#06b6d4', emoji: '🧠' },
         'sonnet-4.5': { color: '#a855f7', emoji: '🎭' },
-        'llama-405b': { color: '#84cc16', emoji: '🦙' },
+        'llama-4': { color: '#84cc16', emoji: '🦙' },
         'mixtral-8x22b': { color: '#f97316', emoji: '🧪' },
-        'gemini-2.0': { color: '#22d3ee', emoji: '💠' },
+        'mistral': { color: '#22d3ee', emoji: '💠' },
         'deepseek-r1': { color: '#ef4444', emoji: '🔎' },
         'deepseek-v3.2': { color: '#eab308', emoji: '🛰️' },
         'glm-4.7': { color: '#60a5fa', emoji: '🐉' },
@@ -137,18 +142,45 @@
       }
 
       function App() {
-        const [apiBase, setApiBase] = useState('http://localhost:8000');
-        const [wsUrl, setWsUrl] = useState('ws://localhost:8000/ws/game');
-        const [rounds, setRounds] = useState(3);
-        const [timeoutS, setTimeoutS] = useState(6);
-        const [autoTts, setAutoTts] = useState(false);
+        const qp = new URLSearchParams(location.search);
+        const deriveDefaultApiBase = () => {
+          const fromQ = qp.get('api');
+          if (fromQ) return fromQ;
+          const proto = location.protocol;
+          const host = location.hostname;
+          const port = '8000';
+          return `${proto}//${host}:${port}`;
+        };
+        const deriveDefaultWsUrl = (base) => {
+          const fromQ = qp.get('ws');
+          if (fromQ) return fromQ;
+          try {
+            const u = new URL(base);
+            const wsProto = u.protocol === 'https:' ? 'wss:' : 'ws:';
+            return `${wsProto}//${u.hostname}:${u.port||'8000'}/ws/game`;
+          } catch { return 'ws://localhost:8000/ws/game'; }
+        };
+
+        const [apiBase, setApiBase] = useState(deriveDefaultApiBase());
+        const [wsUrl, setWsUrl] = useState(deriveDefaultWsUrl(deriveDefaultApiBase()));
+        const [rounds, setRounds] = useState(10);
+        const [timeoutS, setTimeoutS] = useState(60);
+        const [autoTts, setAutoTts] = useState(true);
         const [status, setStatus] = useState('Disconnected');
         const [phases, setPhases] = useState([]);
+        const [countdown, setCountdown] = useState({ kind: null, remaining_s: 0 });
         const [models, setModels] = useState(null);
+        const [priv, setPriv] = useState({ mafia: [] });
+        const [dayStatus, setDayStatus] = useState({ votes: {}, tally: {}, threshold: 0 });
+        const [mafiaStatus, setMafiaStatus] = useState({ mafia: [], alive_mafia: [], votes: {}, kills: {}, remaining_s: 0 });
         const [asr, setAsr] = useState(null);
+        const [dead, setDead] = useState([]);
         const [ttsText, setTtsText] = useState('Hello from the Mafia control panel');
+        const [adminMode, setAdminMode] = useState(false);
         const [asrFile, setAsrFile] = useState(null);
+        const [legendAgents, setLegendAgents] = useState([]);
         const wsRef = useRef(null);
+        const reconnectRef = useRef(null);
         const [nowSpeaking, setNowSpeaking] = useState(null);
         const { enqueue } = useAudioQueue((meta)=>setNowSpeaking(meta||null), ()=>setNowSpeaking(null));
 
@@ -158,11 +190,18 @@
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
           const ws = new WebSocket(wsUrl);
           wsRef.current = ws;
-          ws.onopen = () => setStatus('Connected');
-          ws.onclose = () => setStatus('Disconnected');
+          setStatus('Connecting...');
+          ws.onopen = () => { setStatus('Connected'); if (reconnectRef.current) { clearTimeout(reconnectRef.current); reconnectRef.current = null; } };
+          ws.onclose = () => {
+            setStatus('Disconnected');
+            if (!reconnectRef.current) {
+              reconnectRef.current = setTimeout(() => { reconnectRef.current = null; connect(); }, 1500);
+            }
+          };
           ws.onerror = () => setStatus('Error');
           ws.onmessage = (m) => { try { handle(JSON.parse(m.data)); } catch {} };
         };
+        useEffect(() => { connect(); /* autoconnect on url change */ return () => { if (reconnectRef.current) { clearTimeout(reconnectRef.current); reconnectRef.current = null; } } }, [wsUrl]);
 
         const start = () => {
           if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return alert('Connect first');
@@ -176,7 +215,9 @@
 
         function handle(msg) {
           if (msg.type === 'phase') {
-            setPhases(prev => [...prev, { name: msg.name, index: msg.index, agents: msg.agents||[], messages: [] }]);
+            setPhases(prev => [...prev, { name: msg.name, index: msg.index, agents: msg.agents||[], messages: [], events: [] }]);
+            setCountdown({ kind: msg.name, remaining_s: 0 });
+            if (Array.isArray(msg.agents)) setLegendAgents(msg.agents);
           } else if (msg.type === 'agent_message') {
             setPhases(prev => {
               if (!prev.length) return prev;
@@ -185,6 +226,47 @@
               return copy;
             });
             if (autoTts && msg.text) enqueueSpeak(msg.text, msg.agent);
+          } else if (msg.type === 'event' && msg.name === 'night_result') {
+            setPhases(prev => {
+              if (!prev.length) return prev;
+              const copy = prev.slice();
+              const last = copy[copy.length-1];
+              const events = (last.events || []).concat([{ type: 'night_result', victim: msg.victim || null }]);
+              copy[copy.length-1] = { ...last, events };
+              return copy;
+            });
+            if (msg.victim) setDead(prev => prev.includes(msg.victim) ? prev : [...prev, msg.victim]);
+          } else if (msg.type === 'private_message') {
+            setPriv(prev => {
+              const chan = msg.channel || 'mafia';
+              const next = { ...prev };
+              const list = next[chan] || [];
+              next[chan] = [...list, { agent: msg.agent, text: msg.text }];
+              return next;
+            });
+            if (autoTts && msg.text) enqueueSpeak(msg.text, msg.agent);
+          } else if (msg.type === 'day_status') {
+            setCountdown({ kind: 'day', remaining_s: Math.max(0, Math.round(msg.remaining_s||0)) });
+            setDayStatus({ votes: msg.votes||{}, tally: msg.tally||{}, threshold: msg.threshold||0 });
+          } else if (msg.type === 'mafia_status') {
+            setMafiaStatus({
+              mafia: msg.mafia || [],
+              alive_mafia: msg.alive_mafia || [],
+              votes: msg.votes || {},
+              kills: msg.kills || {},
+              remaining_s: Math.max(0, Math.round((msg.remaining_s || 0)))
+            });
+            setCountdown({ kind: 'night', remaining_s: Math.max(0, Math.round((msg.remaining_s || 0))) });
+          } else if (msg.type === 'event' && msg.name === 'day_result') {
+            setPhases(prev => {
+              if (!prev.length) return prev;
+              const copy = prev.slice();
+              const last = copy[copy.length-1];
+              const events = (last.events || []).concat([{ type: 'day_result', victim: msg.victim || null, votes: msg.votes || {} }]);
+              copy[copy.length-1] = { ...last, events };
+              return copy;
+            });
+            if (msg.victim) setDead(prev => prev.includes(msg.victim) ? prev : [...prev, msg.victim]);
           }
         }
 
@@ -206,6 +288,8 @@
         useEffect(()=>{ loadModels().catch(()=>{}); }, [apiBase]);
         function getModelFor(name) { const list = models?.agents || []; const found = list.find(a => a.name === name); return found?.openrouter_model || null; }
 
+        // Messages are rendered as-is to keep human-like phrasing.
+
         return (
           <div className="grid">
             <div className="panel">
@@ -224,6 +308,9 @@
                 <label style={{flex:1}}>WS URL<br/><input value={wsUrl} onChange={e=>setWsUrl(e.target.value)} type="text" /></label>
               </div>
               <div className="row">
+                <label className="switch"><input type="checkbox" checked={adminMode} onChange={e=>setAdminMode(e.target.checked)} /> Admin Mode (show Detective/Doctor)</label>
+              </div>
+              <div className="row">
                 <label>Rounds<br/><input value={rounds} onChange={e=>setRounds(e.target.value)} type="number" min={1} /></label>
                 <label>Agent Timeout (s)<br/><input value={timeoutS} onChange={e=>setTimeoutS(e.target.value)} type="number" min={1} step={0.5} /></label>
                 <label className="switch"><input type="checkbox" checked={autoTts} onChange={e=>setAutoTts(e.target.checked)} /> Auto TTS</label>
@@ -234,36 +321,57 @@
                 <button className="btn primary" onClick={start}>Start</button>
                 <button className="btn" onClick={applySettings}>Apply Settings</button>
               </div>
-              <div className="title" style={{marginTop:10}}><h2>Game Timeline</h2></div>
-              <div className="timeline">
+              <div className="title" style={{marginTop:10}}>
+                <h2>Game Timeline</h2>
+                {countdown.kind && <div className="mono" style={{opacity:.9}}>{countdown.kind==='day'?'🗣️ Day':'🌙 Night'} · {countdown.remaining_s}s</div>}
+              </div>
+              {countdown.kind==='day' && (
+                <div className="list" style={{margin:'4px 0 8px'}}>
+                  {(() => {
+                    const thr = dayStatus.threshold||0;
+                    let maj = null;
+                    for (const [t,c] of Object.entries(dayStatus.tally||{})) { if (c >= thr && thr>0) { maj = t; break; } }
+                    return maj ? (
+                      <div className="mono" style={{color:'#86efac', marginBottom:4, animation:'blinkMajority 1.2s ease-in-out infinite'}}>Majority reached: <strong>{maj}</strong></div>
+                    ) : (<div className="mono" style={{opacity:.8}}>Majority at {thr}</div>);
+                  })()}
+                  {Object.entries(dayStatus.tally||{}).map(([target,count])=> (
+                    <div key={target} className={`chip ${count >= (dayStatus.threshold||0) && (dayStatus.threshold||0)>0 ? 'majority' : ''}`} title={`Votes: ${count}`}>
+                      <span className="dot"></span>
+                      <span>{target}</span>
+                      <span className="model mono">{count}/{dayStatus.threshold||0}</span>
+                    </div>
+                  ))}
+                  {(!dayStatus.tally || Object.keys(dayStatus.tally).length===0) && <div className="mono" style={{opacity:.7}}>No votes yet</div>}
+                </div>
+              )}
+              <div className="timeline" id="timeline">
                 {phases.map((p, idx)=> (
                   <div key={idx} className={`phase ${p.name}`}>
                     <div className={`phaseHead ${p.name}`}></div>
                     <div className="meta">{p.name === 'day' ? '☀️' : '🌙'} Phase: <span className="mono">{p.name.toUpperCase()}</span> • Round <span className="mono">#{p.index}</span></div>
-                    <div className="list" style={{marginBottom:8}}>
-                      {p.agents?.map(a=>{
-                        const spoke = p.messages.find(m=>m.agent===a);
-                        const meta = getAgentMeta(a);
-                        const speaking = nowSpeaking && nowSpeaking.agent === a;
-                        return (
-                          <div key={a} className={`chip ${spoke? 'ok':'wait'} ${speaking? 'speaking':''}`}>
-                            {speaking ? <span className="spinner"></span> : <span className="dot" style={{background: meta.color}}></span>}
-                            <span>{a}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <div className="mono" style={{opacity:.7, marginBottom:6}}>Players: {p.agents?.length}</div>
+                    {p.events && p.events.length > 0 && (
+                      <div className="mono" style={{margin:'6px 0', color:'#fca5a5'}}>
+                        {p.events.map((e,i)=> (
+                          e.type==='night_result' ? <div key={i}>{e.victim ? <>Night kill: <strong>{e.victim}</strong></> : 'No one died'}</div>
+                          : e.type==='night_saved' ? <div key={i} style={{color:'#86efac'}}>Saved: <strong>{e.target}</strong></div>
+                          : e.type==='day_result' ? <div key={i}>{e.victim ? <>Lynched: <strong>{e.victim}</strong></> : 'No lynch'} {e.votes && Object.keys(e.votes).length ? <>· votes: {Object.entries(e.votes).map(([v,t])=>`${v}→${t}`).join(', ')}</> : null}</div>
+                          : null
+                        ))}
+                      </div>
+                    )}
                     <div className="stack" style={{display:'grid', gap:8}}>
                       {p.messages.map((m,i)=> {
                         const meta = getAgentMeta(m.agent);
                         const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (m.agent.slice(0,1).toUpperCase());
                         return (
                           <div key={i} className="msg">
-                            <div className="agent"><span className="avatar" style={{background: meta.color}}>{letter}</span><span>{m.agent}</span></div>
+                      <div className="agent"><span className="avatar" style={{background: meta.color}}>{letter}</span></div>
                             <div>
                               <div className="bubble">{m.text}</div>
                             </div>
-                            <div><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
+                            <div className="actions"><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
                           </div>
                         );
                       })}
@@ -275,8 +383,114 @@
 
             <div style={{display:'grid', gap:'16px'}}>
               <div className="panel">
-                <div className="title"><h2>Agents & Models</h2><button className="btn" onClick={loadModels}>Fetch Models</button></div>
-                <pre>{models ? JSON.stringify(models, null, 2) : 'Click Fetch Models'}</pre>
+                <div className="title"><h2>Legend</h2></div>
+                <div className="list">
+                  {legendAgents.length ? legendAgents.map(name => {
+                    const meta = getAgentMeta(name);
+                    const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (name.slice(0,1).toUpperCase());
+                    return (
+                      <div key={name} className="chip" title={name}>
+                        <span className="dot" style={{background: meta.color}}></span>
+                        <span style={{marginRight:6}}>{name}</span>
+                        <span className="avatar" style={{background: meta.color}}>{letter}</span>
+                      </div>
+                    );
+                  }) : <div className="mono" style={{opacity:.7}}>Legend appears after start</div>}
+                </div>
+              </div>
+              <div className="panel">
+                <div className="title"><h2>Graveyard</h2></div>
+                <div className="list" style={{maxHeight:'180px', overflow:'auto'}}>
+                  {dead.length ? dead.map(n => {
+                    const meta = getAgentMeta(n);
+                    return <div key={n} className="chip dead"><span className="dot" style={{background: meta.color}}></span>💀 {n}</div>
+                  }) : <div className="mono" style={{opacity:.7}}>No deaths yet</div>}
+                </div>
+              </div>
+              <div className="panel">
+                <div className="title"><h2>Private Chats</h2></div>
+                <div>
+                  <div className="row" style={{justifyContent:'space-between'}}>
+                    <h3 style={{margin:'4px 0', fontSize:'13px', color:'#c7d2fe'}}>Mafia</h3>
+                    <div className="mono" style={{opacity:.9}}>Night remaining: {mafiaStatus.remaining_s}s</div>
+                  </div>
+                  <div className="list" style={{marginBottom:8}}>
+                    {mafiaStatus.mafia.map(name => {
+                      const meta = getAgentMeta(name);
+                      const vote = mafiaStatus.votes?.[name];
+                      const kill = mafiaStatus.kills?.[name];
+                      const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (name.slice(0,1).toUpperCase());
+                      return (
+                        <div key={name} className="chip" title={vote || kill ? `VOTE:${vote||'-'} KILL:${kill||'-'}` : ''}>
+                          <span className="dot" style={{background: meta.color}}></span>
+                          <span>{name}</span>
+                          {vote && <span className="model mono">V:{vote}</span>}
+                          {kill && <span className="model mono" style={{color:'#fca5a5'}}>K:{kill}</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {(() => {
+                    const alive = mafiaStatus.alive_mafia || [];
+                    const kills = mafiaStatus.kills || {};
+                    if (alive.length && alive.every(n => n in kills)) {
+                      const set = new Set(alive.map(n => kills[n]));
+                      if (set.size === 1) {
+                        const target = [...set][0];
+                        return <div className="mono" style={{color:'#86efac', marginBottom:8}}>Agreed target: <strong>{target}</strong></div>;
+                      }
+                    }
+                    return null;
+                  })()}
+                  <div style={{display:'grid', gap:8}}>
+                    {priv.mafia.map((m,i)=>{
+                      const meta = getAgentMeta(m.agent);
+                      const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (m.agent.slice(0,1).toUpperCase());
+                      return (
+                        <div key={i} className="msg">
+                          <div className="agent"><span className="avatar" style={{background: meta.color}}>{letter}</span><span>{m.agent}</span></div>
+                          <div className="bubble">{m.text}</div>
+                      <div className="actions"><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
+                        </div>
+                      );
+                    })}
+                    {(!priv.mafia || priv.mafia.length===0) && <div className="mono" style={{opacity:.7}}>No messages yet</div>}
+                  </div>
+                  {adminMode && (
+                    <>
+                      <h3 style={{margin:'10px 0 4px', fontSize:'13px', color:'#c7d2fe'}}>Detective</h3>
+                      <div style={{display:'grid', gap:8}}>
+                        {(priv.detective||[]).map((m,i)=>{
+                          const meta = getAgentMeta(m.agent);
+                          const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (m.agent.slice(0,1).toUpperCase());
+                          return (
+                            <div key={i} className="msg">
+                              <div className="agent"><span className="avatar" style={{background: meta.color}}>{letter}</span><span>{m.agent}</span></div>
+                              <div className="bubble">{m.text}</div>
+                              <div><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
+                            </div>
+                          );
+                        })}
+                        {(!priv.detective || priv.detective.length===0) && <div className="mono" style={{opacity:.7}}>No messages yet</div>}
+                      </div>
+                      <h3 style={{margin:'10px 0 4px', fontSize:'13px', color:'#c7d2fe'}}>Doctor</h3>
+                      <div style={{display:'grid', gap:8}}>
+                        {(priv.doctor||[]).map((m,i)=>{
+                          const meta = getAgentMeta(m.agent);
+                          const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (m.agent.slice(0,1).toUpperCase());
+                          return (
+                            <div key={i} className="msg">
+                              <div className="agent"><span className="avatar" style={{background: meta.color}}>{letter}</span><span>{m.agent}</span></div>
+                              <div className="bubble">{m.text}</div>
+                              <div><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
+                            </div>
+                          );
+                        })}
+                        {(!priv.doctor || priv.doctor.length===0) && <div className="mono" style={{opacity:.7}}>No messages yet</div>}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
               <div className="panel">
                 <div className="title"><h2>Speech</h2></div>

@@ -24,13 +24,14 @@ class EchoAgent:
 
 def get_agents() -> List[Agent]:
     names = [
+        # Map our seven agent labels to OpenRouter model slugs
         "gpt-5.2",
         "claude-4.5-opus",
         "sonnet-4.5",
-        "llama-405b",
+        "llama-4",
         "mixtral-8x22b",
-        "gemini-2.0",
-        "deepseek-r1",
+        "mistral",
+        "minimax",
         "deepseek-v3.2",
         "glm-4.7",
     ]
