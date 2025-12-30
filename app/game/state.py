@@ -27,7 +27,8 @@ class GameState:
 def assign_roles(agent_names: List[str], human_name: str | None = None, seed: int | None = None) -> Dict[str, Player]:
     """Assign roles randomly with an optional seed for reproducibility.
 
-    Counts: 2 mafia, 1 detective, 1 doctor, rest villagers.
+    Counts: 2 mafia, 1 detective, 1 doctor, rest villagers. The human, if present,
+    is included in this randomization and may be assigned any role.
     If GAME_ROLE_SEED env var is set and seed is None, it will be used.
     """
     if seed is None:
@@ -40,6 +41,8 @@ def assign_roles(agent_names: List[str], human_name: str | None = None, seed: in
 
     rng = random.Random(seed)
     pool = list(agent_names)
+    if human_name and human_name not in pool:
+        pool.append(human_name)
     rng.shuffle(pool)
 
     mafia = pool[:2]
@@ -49,15 +52,12 @@ def assign_roles(agent_names: List[str], human_name: str | None = None, seed: in
 
     players: Dict[str, Player] = {}
     for n in mafia:
-        players[n] = Player(name=n, role="mafia")
+        players[n] = Player(name=n, role="mafia", is_human=(n == human_name))
     for n in detective:
-        players[n] = Player(name=n, role="detective")
+        players[n] = Player(name=n, role="detective", is_human=(n == human_name))
     for n in doctor:
-        players[n] = Player(name=n, role="doctor")
+        players[n] = Player(name=n, role="doctor", is_human=(n == human_name))
     for n in villagers:
-        players[n] = Player(name=n, role="villager")
-
-    if human_name:
-        players[human_name] = Player(name=human_name, role="villager", is_human=True)
+        players[n] = Player(name=n, role="villager", is_human=(n == human_name))
 
     return players

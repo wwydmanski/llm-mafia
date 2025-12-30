@@ -24,6 +24,7 @@
       .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
       .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; box-shadow: 0 10px 24px rgba(0,0,0,.25); }
       .title { display:flex; align-items:center; justify-content:space-between; margin-bottom: 10px; }
+      .title.sticky { position: sticky; top: 0; z-index: 100; background: var(--panel); margin: -14px -14px 10px -14px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
       .title h2 { font-size: 15px; margin: 0; color: #e5e7eb; opacity: .95; }
       label { font-size: 12px; color: var(--muted); }
       input[type=text], input[type=number] { width: 100%; background: #0b1730; border: 1px solid var(--border); color: var(--text); outline: none; padding: 8px 10px; border-radius: 8px; }
@@ -34,7 +35,13 @@
       .btn:active { transform: translateY(1px); }
       .switch { display:flex; align-items:center; gap:8px; }
       .status { font-size: 12px; color: var(--muted); }
+      .nowGen { font-size: 12px; color: #c7d2fe; display:flex; align-items:center; gap:6px; }
+      .votesBar { display:flex; gap:6px; align-items:center; flex-wrap: wrap; }
+      .votesBar .chip { background:#0b1324; border-color:#22304f; }
+      .deadBanner { background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.3); color:#fecaca; padding:8px 10px; border-radius:8px; margin:8px 0; }
       .timeline { display: grid; gap: 8px; }
+      .scrollArea { overflow-y: auto; max-height: 65vh; padding-right: 4px; }
+      @media (min-height: 800px) { .scrollArea { max-height: 72vh; } }
       .phase { background: linear-gradient(180deg, #0b1730, #0b1324); border: 1px solid var(--border); border-radius: 12px; padding: 10px; transform: translateY(6px); opacity: 0; animation: rise .35s ease forwards; overflow: hidden; }
       .phaseHead { height: 6px; border-radius: 10px 10px 0 0; margin: -10px -10px 8px -10px; position: relative; overflow: hidden; }
       .phaseHead::after { content: ""; position: absolute; inset: 0; background-size: 200% 100%; animation: shimmer 2.5s linear infinite; opacity: .8; }
@@ -55,7 +62,11 @@
       .badge.mafia { background:#0b1324; border-color:#1f2a44; }
       .badge.detective { background:#0c142a; border-color:#1e3a8a; }
       .badge.doctor { background:#0c1f14; border-color:#166534; }
+      .badge.graveyard { background:#1f2937; border-color:#4b5563; }
+      /* removed GOD usage */
       .divider { margin: 6px 0; height: 1px; background: #1e293b; border: 0; }
+      .composer { background: var(--panel); border-top: 1px solid var(--border); padding: 10px 14px; margin: 0 -14px -14px -14px; }
+      .composer.stickyBottom { position: sticky; bottom: 0; z-index: 90; }
       .chip { display:inline-flex; align-items:center; gap:6px; font-size: 11px; color: var(--muted); padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0b1324; }
       .chip .dot { width:8px; height:8px; border-radius:999px; display:inline-block; background:#475569; }
       .chip.ok .dot { background: var(--green); }
@@ -100,10 +111,11 @@
         'deepseek-r1': { color: '#ef4444', emoji: '🔎' },
         'deepseek-v3.2': { color: '#eab308', emoji: '🛰️' },
         'glm-4.7': { color: '#60a5fa', emoji: '🐉' },
+        'puny human': { color: '#f472b6', emoji: '🧍' },
       };
 
-      function hashColor(name) { let h = 0; for (let i=0;i<name.length;i++) { h = (h<<5)-h + name.charCodeAt(i); h|=0; } const hue = Math.abs(h)%360; return `hsl(${hue} 70% 45%)`; }
-      function getAgentMeta(name) { return AGENT_META[name] || { color: hashColor(name), emoji: name.slice(0,1).toUpperCase() }; }
+      function hashColor(name) { name = String(name||''); let h = 0; for (let i=0;i<name.length;i++) { h = (h<<5)-h + name.charCodeAt(i); h|=0; } const hue = Math.abs(h)%360; return `hsl(${hue} 70% 45%)`; }
+      function getAgentMeta(name) { const n = String(name||''); return AGENT_META[n] || { color: hashColor(n), emoji: n.slice(0,1).toUpperCase() || '?' }; }
 
       
 
@@ -176,16 +188,26 @@
         const [countdown, setCountdown] = useState({ kind: null, remaining_s: 0 });
         const [models, setModels] = useState(null);
         const [priv, setPriv] = useState({ mafia: [] });
+        const [grave, setGrave] = useState([]);
+        const [graveSay, setGraveSay] = useState('');
         const [dayStatus, setDayStatus] = useState({ votes: {}, tally: {}, threshold: 0 });
         const [mafiaStatus, setMafiaStatus] = useState({ mafia: [], alive_mafia: [], votes: {}, kills: {}, remaining_s: 0 });
         const [asr, setAsr] = useState(null);
         const [dead, setDead] = useState([]);
-        const [ttsText, setTtsText] = useState('Hello from the Mafia control panel');
+        const [ttsText, setTtsText] = useState('');
         const [adminMode, setAdminMode] = useState(true);
+        const [viewerMode, setViewerMode] = useState('admin'); // 'admin' | 'player'
         const [showPrivate, setShowPrivate] = useState(true);
         const [asrFile, setAsrFile] = useState(null);
         const [legendAgents, setLegendAgents] = useState([]);
+        const [phaseName, setPhaseName] = useState(null);
+        const [paused, setPaused] = useState(false);
+        const [myRole, setMyRole] = useState(null);
         const wsRef = useRef(null);
+        const sayRef = useRef(null);
+        const [autoScroll, setAutoScroll] = useState(true);
+        const timelineRef = useRef(null);
+        const [generating, setGenerating] = useState(null);
         const reconnectRef = useRef(null);
         const [nowSpeaking, setNowSpeaking] = useState(null);
         const { enqueue } = useAudioQueue((meta)=>setNowSpeaking(meta||null), ()=>setNowSpeaking(null));
@@ -212,7 +234,7 @@
         const start = () => {
           if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return alert('Connect first');
           setPhases([]);
-          wsRef.current.send(JSON.stringify({ type: 'start', rounds: Number(rounds)||1 }));
+          wsRef.current.send(JSON.stringify({ type: 'start', rounds: Number(rounds)||1, human: viewerMode==='player' }));
         };
 
         const applySettings = async () => {
@@ -221,9 +243,14 @@
 
         function handle(msg) {
           if (msg.type === 'phase') {
-            setPhases(prev => [...prev, { name: msg.name, index: msg.index, agents: msg.agents||[], messages: [], events: [] }]);
+            setPhases(prev => {
+              const base = { name: msg.name, index: msg.index, agents: msg.agents||[], messages: [], events: [] };
+              return [...prev, base];
+            });
             setCountdown({ kind: msg.name, remaining_s: 0 });
             if (Array.isArray(msg.agents)) setLegendAgents(msg.agents);
+            setPhaseName(msg.name);
+            setMyRole(msg.human_role || null);
           } else if (msg.type === 'agent_message') {
             setPhases(prev => {
               if (!prev.length) return prev;
@@ -231,7 +258,11 @@
               copy[copy.length-1] = { ...copy[copy.length-1], messages: [...copy[copy.length-1].messages, { agent: msg.agent, text: msg.text }] };
               return copy;
             });
-            if (autoTts && msg.text) enqueueSpeak(msg.text, msg.agent);
+            if (autoTts && msg.text && phaseName === 'day') enqueueSpeak(msg.text, msg.agent);
+          } else if (msg.type === 'agent_generating') {
+            setGenerating({ agent: msg.agent, channel: msg.channel||null });
+          } else if (msg.type === 'agent_done') {
+            setGenerating(prev => (prev && prev.agent === msg.agent ? null : prev));
           } else if (msg.type === 'event' && msg.name === 'night_result') {
             setPhases(prev => {
               if (!prev.length) return prev;
@@ -241,25 +272,29 @@
               copy[copy.length-1] = { ...last, events };
               return copy;
             });
-            if (msg.victim) setDead(prev => prev.includes(msg.victim) ? prev : [...prev, msg.victim]);
+            if (msg.victim) setDead(prev => (prev.some(x=>x?.name===msg.victim) ? prev : [...prev, { name: msg.victim, role: msg.victim_role||null }]));
           } else if (msg.type === 'private_message') {
-            setPriv(prev => {
-              const chan = msg.channel || 'mafia';
-              const next = { ...prev };
-              const list = next[chan] || [];
-              next[chan] = [...list, { agent: msg.agent, text: msg.text }];
-              return next;
-            });
-            // Also interleave private messages into the main timeline
-            setPhases(prev => {
-              if (!prev.length) return prev;
-              const copy = prev.slice();
-              const last = copy[copy.length-1];
-              const msgs = (last.messages || []).concat([{ agent: msg.agent, text: msg.text, channel: msg.channel || 'mafia', private: true }]);
-              copy[copy.length-1] = { ...last, messages: msgs };
-              return copy;
-            });
-            if (autoTts && msg.text) enqueueSpeak(msg.text, msg.agent);
+            const chan = msg.channel || 'mafia';
+            if (chan === 'graveyard') {
+              setGrave(prev => prev.concat([{ agent: msg.agent, text: msg.text }]));
+            } else {
+              setPriv(prev => {
+                const next = { ...prev };
+                const list = next[chan] || [];
+                next[chan] = [...list, { agent: msg.agent, text: msg.text }];
+                return next;
+              });
+              // Also interleave private messages into the main timeline
+              setPhases(prev => {
+                if (!prev.length) return prev;
+                const copy = prev.slice();
+                const last = copy[copy.length-1];
+                const msgs = (last.messages || []).concat([{ agent: msg.agent, text: msg.text, channel: chan, private: true }]);
+                copy[copy.length-1] = { ...last, messages: msgs };
+                return copy;
+              });
+            }
+            // Do not auto‑speak private messages; auto‑TTS is restricted to day/public only
           } else if (msg.type === 'day_status') {
             setCountdown({ kind: 'day', remaining_s: Math.max(0, Math.round(msg.remaining_s||0)) });
             setDayStatus({ votes: msg.votes||{}, tally: msg.tally||{}, threshold: msg.threshold||0 });
@@ -272,6 +307,20 @@
               remaining_s: Math.max(0, Math.round((msg.remaining_s || 0)))
             });
             setCountdown({ kind: 'night', remaining_s: Math.max(0, Math.round((msg.remaining_s || 0))) });
+          } else if (msg.type === 'paused') {
+            setPaused(true);
+          } else if (msg.type === 'resumed') {
+            setPaused(false);
+          } else if (msg.type === 'event' && msg.name === 'last_words_window') {
+            // Inform player; if they are the victim, show banner via composer placeholder already indicates
+            setPhases(prev => {
+              if (!prev.length) return prev;
+              const copy = prev.slice();
+              const last = copy[copy.length-1];
+              const events = (last.events || []).concat([{ type: 'last_words_window', victim: msg.victim, duration_s: msg.duration_s||10 }]);
+              copy[copy.length-1] = { ...last, events };
+              return copy;
+            });
           } else if (msg.type === 'event' && msg.name === 'day_result') {
             setPhases(prev => {
               if (!prev.length) return prev;
@@ -281,9 +330,35 @@
               copy[copy.length-1] = { ...last, events };
               return copy;
             });
-            if (msg.victim) setDead(prev => prev.includes(msg.victim) ? prev : [...prev, msg.victim]);
+            if (msg.victim) setDead(prev => (prev.some(x=>x?.name===msg.victim) ? prev : [...prev, { name: msg.victim, role: msg.victim_role||null }]));
           }
         }
+
+        // Track whether user has scrolled up inside the chat (disable autoscroll until they return near bottom)
+        useEffect(() => {
+          const el = timelineRef.current;
+          if (!el) return;
+          const onScroll = () => {
+            try {
+              const nearBottom = (el.scrollTop + el.clientHeight) >= (el.scrollHeight - 40);
+              setAutoScroll(nearBottom);
+            } catch {}
+          };
+          el.addEventListener('scroll', onScroll, { passive: true });
+          // initialize
+          onScroll();
+          return () => { try { el.removeEventListener('scroll', onScroll); } catch {} };
+        }, [timelineRef.current]);
+
+        // After new messages/events, autoscroll the chat container if user is near bottom
+        useEffect(() => {
+          if (!autoScroll) return;
+          const el = timelineRef.current;
+          if (!el) return;
+          requestAnimationFrame(() => {
+            try { el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); } catch {}
+          });
+        }, [phases]);
 
         async function speak(text) {
           const r = await fetch(`${apiBase}/tts/speak`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
@@ -300,6 +375,37 @@
         }
 
         async function loadModels() { const r = await fetch(`${apiBase}/agents/models`); setModels(await r.json()); }
+        function sendSay() {
+          const txt = (ttsText||'').trim(); if (!txt) return;
+          wsRef.current?.send?.(JSON.stringify({ type:'say', channel:'auto', text: txt }));
+          setTtsText('');
+        }
+        function insertAtCursor(str) {
+          const el = sayRef.current; if (!el) { setTtsText((ttsText||'') + str); return; }
+          const start = el.selectionStart ?? (ttsText?.length||0);
+          const end = el.selectionEnd ?? start;
+          const before = (ttsText||'').slice(0, start);
+          const after = (ttsText||'').slice(end);
+          const next = before + str + after;
+          setTtsText(next);
+          setTimeout(() => { try { el.focus(); const pos = start + str.length; el.setSelectionRange(pos, pos); } catch {} }, 0);
+        }
+        function ensurePrefix(prefix) {
+          const cur = (ttsText||'').trimStart();
+          if (cur.toUpperCase().startsWith(prefix)) return;
+          insertAtCursor((cur.length && !cur.startsWith('\n')) ? `\n${prefix}` : prefix);
+        }
+        function handleSayKey(e) {
+          const k = e.key?.toLowerCase();
+          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); sendSay(); return; }
+          if (e.altKey) {
+            if (k === 'v' && phaseName === 'day') { e.preventDefault(); ensurePrefix('VOTE: '); return; }
+            if (k === 'k' && phaseName === 'night' && myRole === 'mafia') { e.preventDefault(); ensurePrefix('KILL: '); return; }
+            if (k === 'i' && phaseName === 'night' && myRole === 'detective') { e.preventDefault(); ensurePrefix('INSPECT '); return; }
+            if (k === 'p' && phaseName === 'night' && myRole === 'doctor') { e.preventDefault(); ensurePrefix('PROTECT '); return; }
+            if (k === 'l' && phaseName === 'day') { e.preventDefault(); ensurePrefix('LAST WORDS: '); return; }
+          }
+        }
         useEffect(()=>{ loadModels().catch(()=>{}); }, [apiBase]);
         function getModelFor(name) { const list = models?.agents || []; const found = list.find(a => a.name === name); return found?.openrouter_model || null; }
 
@@ -308,7 +414,49 @@
         return (
           <div className="grid">
             <div className="panel">
-              <div className="title"><h2>Game Timeline</h2><div className="status">{status}</div></div>
+              <div className="title sticky">
+                <h2>Game Timeline</h2>
+                <div className="row" style={{justifyContent:'flex-end', alignItems:'center', gap:6}}>
+                  <div className="mono" style={{opacity:.9, marginRight:8}}>{status}</div>
+                  {generating && (
+                    <div className="nowGen" title={generating.channel ? `Channel: ${generating.channel}` : ''}>
+                      <div className="spinner"></div>
+                      <span>Generating:</span>
+                      <strong>{generating.agent}</strong>
+                    </div>
+                  )}
+                  <label className="mono" style={{opacity:.8}}>View
+                    <select value={viewerMode} onChange={e=>setViewerMode(e.target.value)} style={{marginLeft:6}}>
+                      <option value="admin">Admin</option>
+                      <option value="player">Player</option>
+                    </select>
+                  </label>
+                  {phaseName==='day' && (
+                    <div className="votesBar" title="Live voting status">
+                      <span className="mono" style={{opacity:.9}}>Votes</span>
+                      {Object.entries(dayStatus.tally||{}).map(([target,count])=> (
+                        <div key={target} className={`chip ${count >= (dayStatus.threshold||0) && (dayStatus.threshold||0)>0 ? 'majority' : ''}`}>
+                          <span className="dot"></span>
+                          <span>{target}</span>
+                          <span className="model mono">{count}/{dayStatus.threshold||0}</span>
+                        </div>
+                      ))}
+                      {(!dayStatus.tally || Object.keys(dayStatus.tally).length===0) && <div className="mono" style={{opacity:.7}}>No votes</div>}
+                    </div>
+                  )}
+                  <label className="mono" style={{opacity:.8}}>Rounds
+                    <input type="number" min={1} value={rounds} onChange={e=>setRounds(e.target.value)} style={{width:70, marginLeft:6}} />
+                  </label>
+                  {viewerMode==='player' ? null : null}
+                  <button className="btn" onClick={()=> { wsRef.current?.send?.(JSON.stringify({type: paused ? 'resume' : 'pause'})); setPaused(!paused); }}>
+                    {paused ? 'Resume' : 'Pause'}
+                  </button>
+                  <button className="btn primary" onClick={start}>Start</button>
+              </div>
+            </div>
+            {viewerMode==='player' && (!legendAgents.includes('puny human')) && (
+              <div className="deadBanner mono">You are dead. You can still talk in the Graveyard chat below.</div>
+            )}
               {nowSpeaking && (
                 <div className="row" style={{alignItems:'center', marginTop: '6px'}}>
                   <div className="spinner"></div>
@@ -332,21 +480,14 @@
                 }) : <div className="mono" style={{opacity:.7}}>Legend appears after start</div>}
               </div>
               <div className="list" style={{maxHeight:'120px', overflow:'auto', margin:'4px 0 12px'}}>
-                {dead.length ? dead.map(n => {
-                  const meta = getAgentMeta(n);
-                  return <div key={n} className="chip dead"><span className="dot" style={{background: meta.color}}></span>💀 {n}</div>
+                {dead.length ? dead.map(d => {
+                  const meta = getAgentMeta(d.name);
+                  const role = d.role || 'unknown';
+                  const roleColor = role==='mafia' ? '#ef4444' : role==='detective' ? '#2563eb' : role==='doctor' ? '#16a34a' : '#64748b';
+                  return <div key={d.name} className="chip dead"><span className="dot" style={{background: roleColor}}></span>💀 {d.name} <span className="mono" style={{marginLeft:6, opacity:.8}}>({role})</span></div>
                 }) : <div className="mono" style={{opacity:.7}}>No deaths yet</div>}
               </div>
-              <div className="title" style={{marginTop:10}}>
-                <h2>Game Timeline</h2>
-                <div className="row" style={{justifyContent:'flex-end', alignItems:'center', gap:6}}>
-                  <div className="mono" style={{opacity:.9, marginRight:8}}>{status}</div>
-                  <label className="mono" style={{opacity:.8}}>Rounds
-                    <input type="number" min={1} value={rounds} onChange={e=>setRounds(e.target.value)} style={{width:70, marginLeft:6}} />
-                  </label>
-                  <button className="btn primary" onClick={start}>Start</button>
-                </div>
-              </div>
+              
               {countdown.kind==='day' && (
                 <div className="list" style={{margin:'4px 0 8px'}}>
                   {(() => {
@@ -367,7 +508,8 @@
                   {(!dayStatus.tally || Object.keys(dayStatus.tally).length===0) && <div className="mono" style={{opacity:.7}}>No votes yet</div>}
                 </div>
               )}
-              <div className="timeline" id="timeline">
+              <div className="scrollArea" ref={timelineRef}>
+                <div className="timeline" id="timeline">
                 {phases.map((p, idx)=> (
                   <div key={idx} className={`phase ${p.name}`}>
                     <div className={`phaseHead ${p.name}`}></div>
@@ -376,9 +518,18 @@
                     {p.events && p.events.length > 0 && (
                       <div className="mono" style={{margin:'6px 0', color:'#fca5a5'}}>
                         {p.events.map((e,i)=> (
-                          e.type==='night_result' ? <div key={i}>{e.victim ? <>Night kill: <strong>{e.victim}</strong></> : 'No one died'}</div>
+                          e.type==='night_result' ? (
+                            <div key={i}>{e.victim ? <>Night kill: <strong>{e.victim}</strong>{e.victim_role ? <> • role: <span className="mono">{e.victim_role}</span></> : null}</> : 'No one died'}</div>
+                          )
                           : e.type==='night_saved' ? <div key={i} style={{color:'#86efac'}}>Saved: <strong>{e.target}</strong></div>
-                          : e.type==='day_result' ? <div key={i}>{e.victim ? <>Lynched: <strong>{e.victim}</strong></> : 'No lynch'} {e.votes && Object.keys(e.votes).length ? <>· votes: {Object.entries(e.votes).map(([v,t])=>`${v}→${t}`).join(', ')}</> : null}</div>
+                          : e.type==='last_words_window' ? <div key={i} style={{color:'#c7d2fe'}}>Last words window for <strong>{e.victim}</strong> (≈{e.duration_s||10}s)</div>
+                          : e.type==='day_result' ? (
+                            <div key={i}>
+                              {e.victim ? <>Lynched: <strong>{e.victim}</strong>{e.victim_role ? <> • role: <span className="mono">{e.victim_role}</span></> : null}</> : 'No lynch'}
+                              {e.votes && Object.keys(e.votes).length ? <> · votes: {Object.entries(e.votes).map(([v,t])=>`${v}→${t}`).join(', ')}</> : null}
+                              {e.last_words && e.victim ? <div className="mono" style={{opacity:.85, marginTop:4}}>Last words of {e.victim}: “{String(e.last_words).replace(/^.*?:\s*/,'')}”</div> : null}
+                            </div>
+                          )
                           : e.type==='game_over' ? <div key={i} style={{color:'#fde68a'}}>Game over: <strong>{(e.winner||'').toUpperCase()}</strong> wins</div>
                           : null
                         ))}
@@ -386,9 +537,17 @@
                     )}
                     <div className="stack" style={{display:'grid', gap:8}}>
                       {p.messages.map((m,i)=> {
-                        // Optionally hide detective/doctor private messages unless in Admin Mode
-                        if (m.private && (m.channel==='detective' || m.channel==='doctor') && !adminMode) return null;
-                        if (!showPrivate && m.private) return null;
+                        // In player view, hide private messages unless they belong to our channel
+                        if (viewerMode==='player') {
+                          if (m.private) {
+                            if (!myRole) return null;
+                            if (!((myRole==='mafia' && m.channel==='mafia') || (myRole==='detective' && m.channel==='detective') || (myRole==='doctor' && m.channel==='doctor'))) return null;
+                          }
+                        } else {
+                          // Admin view can still optionally hide some private channels
+                          if (m.private && (m.channel==='detective' || m.channel==='doctor') && !adminMode) return null;
+                          if (!showPrivate && m.private) return null;
+                        }
                         const meta = getAgentMeta(m.agent);
                         const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (m.agent.slice(0,1).toUpperCase());
                         const isPriv = !!m.private;
@@ -420,7 +579,100 @@
                     </div>
                   </div>
                 ))}
+                </div>
               </div>
+              {viewerMode==='admin' && (
+                <div className="panel" style={{marginTop:8}}>
+                  <div className="title"><h2>Graveyard (Admin)</h2><div className="status">Deceased chat</div></div>
+                  <div className="list" style={{maxHeight:'160px', overflow:'auto'}}>
+                    {grave.map((m,i)=> (
+                      <div key={i} className="msg">
+                        <div className="agent" style={{display:'grid', justifyItems:'center'}}>
+                          <span className="avatar" style={{background: '#64748b'}}>{(m.agent||'')[0]?.toUpperCase?.()||'G'}</span>
+                          <div className="mono" style={{fontSize:'10px', opacity:.8, marginTop:4, maxWidth:40, textAlign:'center'}}>{m.agent}</div>
+                        </div>
+                        <div>
+                          <div className="badge graveyard">Graveyard</div>
+                          <div className="bubble">{m.text}</div>
+                        </div>
+                        <div className="actions"><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="row" style={{marginTop:8, alignItems:'center', gap:6}}>
+                    <label className="mono" style={{opacity:.85}}>Speak to the dead
+                      <input type="text" placeholder="Graveyard message" value={graveSay} onChange={e=>setGraveSay(e.target.value)} onKeyDown={(e)=>{ if (e.key==='Enter') { wsRef.current?.send?.(JSON.stringify({ type:'say', channel:'graveyard', text: graveSay })); setGraveSay(''); } }} style={{width:320, marginLeft:6}} />
+                    </label>
+                    <button className="btn" onClick={()=> { wsRef.current?.send?.(JSON.stringify({ type:'say', channel:'graveyard', text: graveSay })); setGraveSay(''); }}>Send</button>
+                  </div>
+                </div>
+              )}
+              {viewerMode==='player' && (!legendAgents.includes('puny human')) && (
+                <div className="panel" style={{marginTop:8}}>
+                  <div className="title"><h2>Graveyard</h2><div className="status">Deceased chat</div></div>
+                  <div className="list" style={{maxHeight:'160px', overflow:'auto'}}>
+                    {grave.length ? grave.map((m,i)=> (
+                      <div key={i} className="msg">
+                        <div className="agent" style={{display:'grid', justifyItems:'center'}}>
+                          <span className="avatar" style={{background: '#64748b'}}>{(m.agent||'')[0]?.toUpperCase?.()||'G'}</span>
+                          <div className="mono" style={{fontSize:'10px', opacity:.8, marginTop:4, maxWidth:40, textAlign:'center'}}>{m.agent}</div>
+                        </div>
+                        <div>
+                          <div className="badge graveyard">Graveyard</div>
+                          <div className="bubble">{m.text}</div>
+                        </div>
+                        <div className="actions"><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
+                      </div>
+                    )) : <div className="mono" style={{opacity:.7}}>No messages yet</div>}
+                  </div>
+                </div>
+              )}
+              {viewerMode==='player' && (
+                <div className="composer stickyBottom">
+                  <div className="row" style={{alignItems:'center', gap:6, flexWrap:'wrap'}}>
+                    <div className="chip" title={`Your role`}>
+                      <span className="dot" style={{background: (myRole==='mafia' ? '#ef4444' : myRole==='detective' ? '#2563eb' : myRole==='doctor' ? '#16a34a' : '#64748b')}}></span>
+                      <span>Role: {myRole || 'unknown'}</span>
+                    </div>
+                    {phaseName==='day' && legendAgents.includes('puny human') && (
+                      <button className="btn" title="Insert VOTE: " onClick={()=>ensurePrefix('VOTE: ')}>Vote</button>
+                    )}
+                    {phaseName==='day' && legendAgents.includes('puny human') && (
+                      <button className="btn" title="Insert LAST WORDS: " onClick={()=>ensurePrefix('LAST WORDS: ')}>Last Words</button>
+                    )}
+                    {phaseName==='night' && myRole==='mafia' && legendAgents.includes('puny human') && (
+                      <button className="btn" title="Insert KILL: " onClick={()=>ensurePrefix('KILL: ')}>Kill</button>
+                    )}
+                    {phaseName==='night' && myRole==='detective' && legendAgents.includes('puny human') && (
+                      <button className="btn" title="Insert INSPECT " onClick={()=>ensurePrefix('INSPECT ')}>Inspect</button>
+                    )}
+                    {phaseName==='night' && myRole==='doctor' && legendAgents.includes('puny human') && (
+                      <button className="btn" title="Insert PROTECT " onClick={()=>ensurePrefix('PROTECT ')}>Protect</button>
+                    )}
+                    <label className="mono" style={{opacity:.8}}>Say
+                      <input
+                        ref={sayRef}
+                        type="text"
+                        placeholder={(function(){
+                          const alive = legendAgents.includes('puny human');
+                          if (!alive) return 'Graveyard chat…';
+                          if (phaseName==='day') return 'VOTE: <name> …';
+                          if (phaseName==='night' && myRole==='mafia') return 'KILL: <name> …';
+                          if (phaseName==='night' && myRole==='detective') return 'INSPECT <name>';
+                          if (phaseName==='night' && myRole==='doctor') return 'PROTECT <name>';
+                          return 'Speak as puny human';
+                        })()}
+                        value={ttsText}
+                        onChange={e=>setTtsText(e.target.value)}
+                        onKeyDown={handleSayKey}
+                        style={{width:320, marginLeft:6}}
+                      />
+                    </label>
+                    <button className="btn" onClick={sendSay}>Send</button>
+                    <span className="mono" style={{opacity:.7}} title="Hotkeys">Hotkeys: Ctrl+Enter send; Alt+V vote (day); Alt+K kill (mafia night); Alt+I inspect (detective night); Alt+P protect (doctor night)</span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         );

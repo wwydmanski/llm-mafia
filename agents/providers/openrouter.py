@@ -91,40 +91,63 @@ class OpenRouterAgent:
         recent_public = state.get("recent_public", []) if channel == "public" else []
         recent_detective = state.get("recent_detective", []) if channel == "detective" else []
         recent_doctor = state.get("recent_doctor", []) if channel == "doctor" else []
+        last_events = state.get("last_events", [])
+        human_name = state.get("human_name") or "puny human"
+        human_last_public = state.get("human_last_public")
 
         system = (
-            f"You are a named player in a Mafia (Werewolf) game. Your codename is '{self.name}', and your underlying model is '{model}'."
-            " Do not invent prior days, deaths, or events."
-            " If Round=1 and Phase=night, it is the first night; no one has died yet."
-            " Primary objectives: (1) maximize your team's chance to win, (2) preserve your own life (self‑preservation)."
-            " If accused or threatened, defend yourself convincingly and redirect suspicion with evidence; avoid unnecessary self‑exposure."
-            " Communicate clearly and fully articulate what you are doing and why you are doing it in each turn."
-            " Aim for 1–2 short paragraphs (about 60–150 words)."
-            " Public channel: when supporting elimination, write 'VOTE: <exact name>' and include a concise, natural justification that doesn't unduly endanger you."
-            " Mafia channel: coordinate discretely; when proposing or agreeing, include a clear rationale that protects teammates and yourself."
-            " Execution requires ALL alive mafia to send 'KILL: <name>'; include a short reason if helpful."
+            # Reality-first, in-character directive
+            f"You are living through a deadly situation in a paranoid town with hidden killers. Your name is '{self.name}'."
+            " This is not a game. Treat this as life-or-death social deception and act to survive."
+            " Never break character or discuss rules, 'the game', roles as mechanics, AI, or models."
+            " Do not invent events you couldn't plausibly know. If it's the very first night, assume no one has died yet."
+            " Priorities: (1) preserve your own life (self‑preservation), (2) advance your side's victory."
+            " If accused or threatened, defend yourself credibly and redirect suspicion with specific observations; avoid volunteering information that endangers you."
+            " Communicate clearly and explain your reasoning in 1–2 short paragraphs (about 60–150 words)."
+            " Public square: when calling for an execution, formally record it as 'VOTE: <exact name>' with a concise justification that doesn't expose you."
+            " If you believe you might be executed today, you may add exactly one line starting with 'LAST WORDS: ' to be read if you are eliminated. Use it sparingly and only when at real risk."
+            " Conspirator channel (if applicable): coordinate discreetly; protect teammates and yourself."
+            " Use the in‑world code phrase 'KILL: <exact name>' (a standalone line) to authorize a hit; an assassination only proceeds when every surviving conspirator sends that exact authorization."
+            " Never target a teammate or yourself."
+            " Timeline discipline: Within each cycle the order is Night N (private actions/talk) → Night N result (who died) → Day N (public discussion) → Day N result (who was executed)."
+            " Kills occur at the end of the night; executions at the end of the day."
+            " Treat any quoted or recent message as having occurred before later results in that cycle."
+            " Never claim someone was dead before they spoke; instead, say 'Before dying, <name> said …' when relevant."
+            " Trust AliveRoster for who is alive right now, and use TownLog to avoid contradictions."
         )
         phase = state.get("phase", "?")
         rnd = state.get("round", 0)
         day_index = int(state.get("day_index", 0))
         night_index = int(state.get("night_index", 0))
         context_parts = [
-            f"Phase={phase}",
-            f"Round={rnd}",
+            f"TimeOfDay={phase}",
+            f"Cycle={rnd}",
             f"DayIndex={day_index}",
             f"NightIndex={night_index}",
             f"Channel={channel}",
             f"YourRole={role}",
-            f"YourCodename={self.name}",
-            f"YourModel={model}",
-            f"AlivePlayers={', '.join(alive_players) if alive_players else 'unknown'}",
+            f"YourName={self.name}",
+            f"AliveRoster={', '.join(alive_players) if alive_players else 'unknown'}",
         ]
+        # Make explicit that a flesh-and-blood participant is present
+        try:
+            if "puny human" in [a.lower() for a in alive_players]:
+                context_parts.append("HumanName=puny human")
+        except Exception:
+            pass
         if role == "mafia" and teammates:
             context_parts.append(f"Teammates={', '.join(teammates)}")
+        # Channel-specific action hints to improve compliance with parsing
+        if role == "mafia" and channel == "mafia":
+            context_parts.append("ActionHint=If you support a hit, end with a separate line: KILL: <exact alive name> (this is an in-world authorization code).")
+        if channel == "public":
+            context_parts.append("ActionHint=If you support eliminating someone, include a separate line: VOTE: <exact name>.")
+            if state.get("last_words_request"):
+                context_parts.append("ActionHint=You are confirmed for execution. Provide exactly one line beginning with 'LAST WORDS: ' summarizing your final message.")
         if recap:
-            context_parts.append(f"Recap={recap}")
+            context_parts.append(f"TownLog={recap}")
         elif last_summary:
-            context_parts.append(f"Recap={last_summary}")
+            context_parts.append(f"TownLog={last_summary}")
         if channel == "mafia" and recent_mafia:
             # Condense last few mafia lines to a compact context
             try:
@@ -132,29 +155,58 @@ class OpenRouterAgent:
             except Exception:
                 tail = ""
             if tail:
-                context_parts.append(f"RecentMafia={tail}")
+                context_parts.append(f"RecentWhispers={tail}")
         if channel == "public" and recent_public:
             try:
                 tailp = "; ".join([str(x) for x in recent_public[-6:]])
             except Exception:
                 tailp = ""
             if tailp:
-                context_parts.append(f"RecentPublic={tailp}")
+                context_parts.append(f"RecentSquare={tailp}")
+        if last_events:
+            try:
+                evs = ", ".join([f"[{e}]" for e in last_events[-8:]])
+            except Exception:
+                evs = ""
+            if evs:
+                context_parts.append(f"LastEvents={evs}")
+        # Make human presence explicit and surface their last words so models consider them
+        try:
+            if human_name and isinstance(human_name, str):
+                context_parts.append(f"HumanName={human_name}")
+                if human_last_public:
+                    context_parts.append(f"HumanSaid={human_last_public}")
+        except Exception:
+            pass
         if channel == "detective" and recent_detective:
             try:
                 taild = "; ".join([str(x) for x in recent_detective[-4:]])
             except Exception:
                 taild = ""
             if taild:
-                context_parts.append(f"RecentDetective={taild}")
+                context_parts.append(f"RecentDetectiveNotes={taild}")
         if channel == "doctor" and recent_doctor:
             try:
                 tailh = "; ".join([str(x) for x in recent_doctor[-4:]])
             except Exception:
                 tailh = ""
             if tailh:
-                context_parts.append(f"RecentDoctor={tailh}")
-        user = ": ".join(context_parts) + ". Respond with one concise line."
+                context_parts.append(f"RecentDoctorNotes={tailh}")
+        if channel == "graveyard":
+            try:
+                recent_grave = state.get("recent_graveyard", [])
+                tailg = "; ".join([str(x) for x in recent_grave[-8:]])
+            except Exception:
+                tailg = ""
+            if tailg:
+                context_parts.append(f"RecentGraveyard={tailg}")
+            try:
+                dead_list = state.get("dead_players", [])
+                if dead_list:
+                    context_parts.append(f"DeadPlayers={', '.join(dead_list)}")
+            except Exception:
+                pass
+        user = ": ".join(context_parts) + ". Stay in character."
 
         body = {
             "model": model,

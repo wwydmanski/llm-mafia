@@ -36,6 +36,19 @@ Copy `.env.example` to `.env` and set as needed:
   - Majority ends the day early; otherwise plurality lynch (ties = no lynch).
 - Dead don’t talk. Legend and Graveyard appear above the timeline.
 
+### Player vs. Admin Views
+
+- Admin view (default):
+  - Full timeline with interleaved private chats (Mafia/Detective/Doctor), live vote chips, pause/resume, start controls.
+  - Includes a Graveyard panel to monitor messages from deceased players.
+- Player view:
+  - You play as a regular participant named "puny human"; your role is randomized (mafia/detective/doctor/villager) along with the AIs.
+  - You cannot see private night chats unless you belong to that role (e.g., mafia sees mafia chat).
+  - Use the sticky header’s Say box to speak; at night, messages auto-route to your private role channel when applicable.
+  - Hotkeys: Ctrl+Enter send; Alt+V vote (day); Alt+K kill (mafia night); Alt+I inspect (detective night); Alt+P protect (doctor night).
+  - If you die, a red banner appears and your messages go to the Graveyard chat (only deceased can see it).
+
+
 ### Model Behavior
 
 - Agents are told their codename/model and receive a recap each turn (recent events, alive/dead) to reduce confusion.

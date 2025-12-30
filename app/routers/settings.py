@@ -11,7 +11,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 
 class Settings(BaseModel):
-    agent_timeout_s: float = Field(default_factory=lambda: float(os.getenv("AGENT_TIMEOUT_S", "60")))
+    agent_timeout_s: float = Field(default_factory=lambda: float(os.getenv("AGENT_TIMEOUT_S", "120")))
 
 
 _settings: Settings = Settings()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 import re
 
 from .state import Player, assign_roles
@@ -11,25 +11,32 @@ from .state import Player, assign_roles
 @dataclass
 class GameEngine:
     agents: List[str]
+    human_name: str | None = "puny human"
     roles: Dict[str, Player] = field(init=False)
     phase: str = field(default="night")  # night or day
     round: int = field(default=1)
     day_index: int = field(default=0)
     night_index: int = field(default=0)
-    public_log: List[str] = field(default_factory=list)
+    # Store public messages with lightweight metadata to enable timeline tags in prompts
+    # Shape: {text, phase, day_index, night_index, round}
+    public_log: List[Dict[str, Any]] = field(default_factory=list)
     mafia_log: List[str] = field(default_factory=list)
     detective_log: List[str] = field(default_factory=list)
     doctor_log: List[str] = field(default_factory=list)
+    graveyard_log: List[str] = field(default_factory=list)
     events: List[Dict[str, str]] = field(default_factory=list)
     mafia_votes: Dict[str, str] = field(default_factory=dict)
     mafia_kills: Dict[str, str] = field(default_factory=dict)
     day_votes: Dict[str, str] = field(default_factory=dict)
+    day_last_words: Dict[str, str] = field(default_factory=dict)
+    last_words_for: str | None = None
+    final_last_words: Dict[str, str] = field(default_factory=dict)
     detective_target: str | None = None
     doctor_target: str | None = None
     detective_results: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        self.roles = assign_roles(self.agents)
+        self.roles = assign_roles(self.agents, human_name=self.human_name)
 
     # --- Queries
     def alive_players(self) -> List[str]:
@@ -43,7 +50,13 @@ class GameEngine:
 
     # --- Logs
     def log_public(self, text: str) -> None:
-        self.public_log.append(text)
+        self.public_log.append({
+            "text": text,
+            "phase": self.phase,
+            "day_index": self.day_index,
+            "night_index": self.night_index,
+            "round": self.round,
+        })
 
     def log_mafia(self, text: str) -> None:
         self.mafia_log.append(text)
@@ -86,6 +99,58 @@ class GameEngine:
         head = f"Recap: {'; '.join(ev)}" if ev else "Recap: (no prior events)"
         return f"{head}; Alive: {alive}; Dead: {dead}"
 
+    def last_events(self, limit: int = 6) -> List[str]:
+        """Return a compact, ordered list of recent structured events for prompts.
+        Example items: "Night2: kill Alice", "Night2: saved Bob", "Day2: lynch Carol".
+        """
+        items: List[str] = []
+        for e in self.events[-limit:]:
+            t = e.get("type")
+            if t == "night_kill":
+                items.append(f"Night{e.get('night','#')}: kill {e.get('victim')}")
+            elif t == "night_saved":
+                items.append(f"Night{e.get('night','#')}: saved {e.get('target')}")
+            elif t == "day_lynch":
+                items.append(f"Day{e.get('day','#')}: lynch {e.get('victim')}")
+        return items
+
+    def recent_public_with_phase_tags(self, limit: int = 8) -> List[str]:
+        """Return recent public messages, prefixed with phase tags like [DAY2] or [NIGHT2]."""
+        out: List[str] = []
+        for entry in self.public_log[-limit:]:
+            try:
+                if isinstance(entry, dict):
+                    phase = entry.get("phase", "")
+                    di = int(entry.get("day_index", 0))
+                    ni = int(entry.get("night_index", 0))
+                    tag = f"[DAY{di}]" if phase == "day" else f"[NIGHT{ni}]"
+                    out.append(f"{tag} {entry.get('text','')}")
+                else:
+                    # Back-compat if older runs stored plain strings
+                    out.append(str(entry))
+            except Exception:
+                out.append(str(entry))
+        return out
+
+    def last_public_by(self, name: str, only_current_day: bool = False) -> str | None:
+        """Return the last public line said by the given player, optionally restricted to the current day.
+        Returns the full rendered line without tags; caller may trim the leading 'Name: ' if desired.
+        """
+        for entry in reversed(self.public_log):
+            try:
+                if isinstance(entry, dict):
+                    if only_current_day:
+                        if not (entry.get("phase") == "day" and int(entry.get("day_index", -1)) == int(self.day_index)):
+                            continue
+                    text = str(entry.get("text", ""))
+                else:
+                    text = str(entry)
+                if text.lower().startswith(f"{name.lower()}: "):
+                    return text
+            except Exception:
+                continue
+        return None
+
     # --- Phase management
     def start_night(self) -> None:
         self.phase = "night"
@@ -109,6 +174,8 @@ class GameEngine:
         self.phase = "day"
         self.day_index += 1
         self.day_votes = {}
+        self.day_last_words = {}
+        self.last_words_for = None
 
     def end_day(self) -> None:
         self.round += 1
@@ -195,6 +262,16 @@ class GameEngine:
             "summary": self.summary(),
             "recap": self.recap(),
         }
+        # Expose human context and their last public statement to improve awareness
+        if self.human_name:
+            st["human_name"] = self.human_name
+            last_pub = self.last_public_by(self.human_name)
+            if last_pub:
+                # Strip leading 'Name: '
+                try:
+                    st["human_last_public"] = last_pub.split(": ", 1)[1]
+                except Exception:
+                    st["human_last_public"] = last_pub
         if role == "mafia" and channel == "mafia":
             st["mafia_teammates"] = [n for n in self.mafia_names() if n != agent_name]
             # Provide recent private chat lines for coordination
@@ -206,9 +283,19 @@ class GameEngine:
             if self.mafia_kills:
                 st["kills"] = dict(self.mafia_kills)
         if channel == "public":
-            st["recent_public"] = self.public_log[-8:]
+            st["recent_public"] = self.recent_public_with_phase_tags(limit=8)
             if self.day_votes:
                 st["votes"] = dict(self.day_votes)
+        if channel == "graveyard":
+            try:
+                st["recent_graveyard"] = self.recent_graveyard(limit=10)
+            except Exception:
+                st["recent_graveyard"] = []
+            st["dead_players"] = [n for n, p in self.roles.items() if not p.alive]
+        # Provide compact ordered recent event list to all channels
+        le = self.last_events(limit=8)
+        if le:
+            st["last_events"] = le
         if role == "detective" and channel == "detective":
             st["recent_detective"] = self.detective_log[-6:]
             if self.detective_results:
@@ -280,6 +367,41 @@ class GameEngine:
                 self.day_votes[voter] = target
         return self.day_votes
 
+    # --- Last words (day lynch)
+    def parse_last_words_from_text(self, text: str) -> str | None:
+        """Parse an explicit 'LAST WORDS:' declaration from a public message.
+        Accepts forms like 'LAST WORDS: ...' (case-insensitive). Returns the content after the colon.
+        """
+        lower = text.lower()
+        m = re.search(r"\blast\s*words\s*:\s*(.+)$", lower, re.DOTALL)
+        if not m:
+            return None
+        # Extract from original text to preserve casing and punctuation
+        # Find the same span in original text by measuring prefix length from lower-cased version
+        start = m.start(1)
+        try:
+            return text[start:].strip()
+        except Exception:
+            return m.group(1).strip()
+
+    def record_last_words(self, speaker: str, text: str) -> None:
+        """Record last words only when a last-words window is open for the speaker."""
+        if not self.last_words_for or speaker != self.last_words_for:
+            return
+        content = self.parse_last_words_from_text(text) or text.strip()
+        if not content:
+            return
+        self.day_last_words[speaker] = content
+
+    def get_last_words(self, name: str) -> str | None:
+        return self.day_last_words.get(name)
+
+    def open_last_words(self, victim: str) -> None:
+        self.last_words_for = victim
+
+    def close_last_words(self) -> None:
+        self.last_words_for = None
+
     def compute_day_lynch(self) -> str | None:
         # Tally votes from alive voters only; plurality wins; ties -> no lynch
         tally: Dict[str, int] = {}
@@ -336,3 +458,7 @@ class GameEngine:
         if target:
             self.doctor_target = target
         return self.doctor_target
+
+    # --- Graveyard helpers
+    def recent_graveyard(self, limit: int = 10) -> List[str]:
+        return list(self.graveyard_log[-limit:])
