@@ -21,7 +21,7 @@
       body { margin: 0; font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Helvetica, Arial, Apple Color Emoji, Segoe UI Emoji; background: linear-gradient(180deg, #0b1220, #0b0f1a 40%, #0a0d18); color: var(--text); }
       .container { max-width: 1040px; margin: 24px auto; padding: 0 16px; }
       h1 { font-size: 22px; margin: 0 0 16px; letter-spacing: 0.3px; }
-      .grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 16px; }
+      .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
       .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px; box-shadow: 0 10px 24px rgba(0,0,0,.25); }
       .title { display:flex; align-items:center; justify-content:space-between; margin-bottom: 10px; }
       .title h2 { font-size: 15px; margin: 0; color: #e5e7eb; opacity: .95; }
@@ -51,6 +51,11 @@
       .bubble { background: #0c1a37; border: 1px solid #0f2549; padding: 8px 10px; border-radius: 8px; }
       .actions { opacity: 0; transition: opacity .15s ease; }
       .msg:hover .actions { opacity: 1; }
+      .badge { display:inline-block; font-size:10px; line-height:1; padding:4px 6px; border-radius:999px; border:1px solid var(--border); margin-bottom:6px; color:#cbd5e1; }
+      .badge.mafia { background:#0b1324; border-color:#1f2a44; }
+      .badge.detective { background:#0c142a; border-color:#1e3a8a; }
+      .badge.doctor { background:#0c1f14; border-color:#166534; }
+      .divider { margin: 6px 0; height: 1px; background: #1e293b; border: 0; }
       .chip { display:inline-flex; align-items:center; gap:6px; font-size: 11px; color: var(--muted); padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#0b1324; }
       .chip .dot { width:8px; height:8px; border-radius:999px; display:inline-block; background:#475569; }
       .chip.ok .dot { background: var(--green); }
@@ -176,7 +181,8 @@
         const [asr, setAsr] = useState(null);
         const [dead, setDead] = useState([]);
         const [ttsText, setTtsText] = useState('Hello from the Mafia control panel');
-        const [adminMode, setAdminMode] = useState(false);
+        const [adminMode, setAdminMode] = useState(true);
+        const [showPrivate, setShowPrivate] = useState(true);
         const [asrFile, setAsrFile] = useState(null);
         const [legendAgents, setLegendAgents] = useState([]);
         const wsRef = useRef(null);
@@ -244,6 +250,15 @@
               next[chan] = [...list, { agent: msg.agent, text: msg.text }];
               return next;
             });
+            // Also interleave private messages into the main timeline
+            setPhases(prev => {
+              if (!prev.length) return prev;
+              const copy = prev.slice();
+              const last = copy[copy.length-1];
+              const msgs = (last.messages || []).concat([{ agent: msg.agent, text: msg.text, channel: msg.channel || 'mafia', private: true }]);
+              copy[copy.length-1] = { ...last, messages: msgs };
+              return copy;
+            });
             if (autoTts && msg.text) enqueueSpeak(msg.text, msg.agent);
           } else if (msg.type === 'day_status') {
             setCountdown({ kind: 'day', remaining_s: Math.max(0, Math.round(msg.remaining_s||0)) });
@@ -293,7 +308,7 @@
         return (
           <div className="grid">
             <div className="panel">
-              <div className="title"><h2>Connection & Settings</h2><div className="status">{status}</div></div>
+              <div className="title"><h2>Game Timeline</h2><div className="status">{status}</div></div>
               {nowSpeaking && (
                 <div className="row" style={{alignItems:'center', marginTop: '6px'}}>
                   <div className="spinner"></div>
@@ -303,27 +318,34 @@
                   </div>
                 </div>
               )}
-              <div className="row">
-                <label style={{flex:1}}>API Base<br/><input value={apiBase} onChange={e=>setApiBase(e.target.value)} type="text" /></label>
-                <label style={{flex:1}}>WS URL<br/><input value={wsUrl} onChange={e=>setWsUrl(e.target.value)} type="text" /></label>
+              <div className="list" style={{margin:'4px 0 8px'}}>
+                {legendAgents.length ? legendAgents.map(name => {
+                  const meta = getAgentMeta(name);
+                  const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (name.slice(0,1).toUpperCase());
+                  return (
+                    <div key={name} className="chip" title={name}>
+                      <span className="dot" style={{background: meta.color}}></span>
+                      <span style={{marginRight:6}}>{name}</span>
+                      <span className="avatar" style={{background: meta.color}}>{letter}</span>
+                    </div>
+                  );
+                }) : <div className="mono" style={{opacity:.7}}>Legend appears after start</div>}
               </div>
-              <div className="row">
-                <label className="switch"><input type="checkbox" checked={adminMode} onChange={e=>setAdminMode(e.target.checked)} /> Admin Mode (show Detective/Doctor)</label>
-              </div>
-              <div className="row">
-                <label>Rounds<br/><input value={rounds} onChange={e=>setRounds(e.target.value)} type="number" min={1} /></label>
-                <label>Agent Timeout (s)<br/><input value={timeoutS} onChange={e=>setTimeoutS(e.target.value)} type="number" min={1} step={0.5} /></label>
-                <label className="switch"><input type="checkbox" checked={autoTts} onChange={e=>setAutoTts(e.target.checked)} /> Auto TTS</label>
-              </div>
-              <div className="row">
-                <button className="btn" onClick={connect}>Connect</button>
-                <button className="btn" onClick={()=>wsRef.current?.close?.()}>Disconnect</button>
-                <button className="btn primary" onClick={start}>Start</button>
-                <button className="btn" onClick={applySettings}>Apply Settings</button>
+              <div className="list" style={{maxHeight:'120px', overflow:'auto', margin:'4px 0 12px'}}>
+                {dead.length ? dead.map(n => {
+                  const meta = getAgentMeta(n);
+                  return <div key={n} className="chip dead"><span className="dot" style={{background: meta.color}}></span>💀 {n}</div>
+                }) : <div className="mono" style={{opacity:.7}}>No deaths yet</div>}
               </div>
               <div className="title" style={{marginTop:10}}>
                 <h2>Game Timeline</h2>
-                {countdown.kind && <div className="mono" style={{opacity:.9}}>{countdown.kind==='day'?'🗣️ Day':'🌙 Night'} · {countdown.remaining_s}s</div>}
+                <div className="row" style={{justifyContent:'flex-end', alignItems:'center', gap:6}}>
+                  <div className="mono" style={{opacity:.9, marginRight:8}}>{status}</div>
+                  <label className="mono" style={{opacity:.8}}>Rounds
+                    <input type="number" min={1} value={rounds} onChange={e=>setRounds(e.target.value)} style={{width:70, marginLeft:6}} />
+                  </label>
+                  <button className="btn primary" onClick={start}>Start</button>
+                </div>
               </div>
               {countdown.kind==='day' && (
                 <div className="list" style={{margin:'4px 0 8px'}}>
@@ -357,152 +379,47 @@
                           e.type==='night_result' ? <div key={i}>{e.victim ? <>Night kill: <strong>{e.victim}</strong></> : 'No one died'}</div>
                           : e.type==='night_saved' ? <div key={i} style={{color:'#86efac'}}>Saved: <strong>{e.target}</strong></div>
                           : e.type==='day_result' ? <div key={i}>{e.victim ? <>Lynched: <strong>{e.victim}</strong></> : 'No lynch'} {e.votes && Object.keys(e.votes).length ? <>· votes: {Object.entries(e.votes).map(([v,t])=>`${v}→${t}`).join(', ')}</> : null}</div>
+                          : e.type==='game_over' ? <div key={i} style={{color:'#fde68a'}}>Game over: <strong>{(e.winner||'').toUpperCase()}</strong> wins</div>
                           : null
                         ))}
                       </div>
                     )}
                     <div className="stack" style={{display:'grid', gap:8}}>
                       {p.messages.map((m,i)=> {
+                        // Optionally hide detective/doctor private messages unless in Admin Mode
+                        if (m.private && (m.channel==='detective' || m.channel==='doctor') && !adminMode) return null;
+                        if (!showPrivate && m.private) return null;
                         const meta = getAgentMeta(m.agent);
                         const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (m.agent.slice(0,1).toUpperCase());
+                        const isPriv = !!m.private;
+                        const badgeClass = m.channel==='mafia' ? 'badge mafia' : m.channel==='detective' ? 'badge detective' : m.channel==='doctor' ? 'badge doctor' : '';
+                        const badgeLabel = isPriv ? (m.channel==='mafia' ? 'Mafia' : m.channel==='detective' ? 'Detective' : m.channel==='doctor' ? 'Doctor' : 'Private') : null;
+                        const isFirstPrivOfChannel = isPriv && !p.messages.slice(0, i).some(x => x.private && (x.channel === m.channel));
                         return (
-                          <div key={i} className="msg">
-                      <div className="agent"><span className="avatar" style={{background: meta.color}}>{letter}</span></div>
-                            <div>
-                              <div className="bubble">{m.text}</div>
+                          <div key={i}>
+                            {isFirstPrivOfChannel && p.name==='night' && (
+                              <div className="mono" style={{opacity:.8, margin:'2px 0'}}>
+                                {badgeLabel} chat (night)
+                                <hr className="divider" />
+                              </div>
+                            )}
+                            <div className="msg">
+                              <div className="agent" style={{display:'grid', justifyItems:'center'}}>
+                                <span className="avatar" style={{background: meta.color}}>{letter}</span>
+                                <div className="mono" style={{fontSize:'10px', opacity:.8, marginTop:4, maxWidth:40, textAlign:'center'}}>{m.agent}</div>
+                              </div>
+                              <div>
+                                {badgeLabel && <div className={badgeClass}>{badgeLabel}</div>}
+                                <div className="bubble">{m.text}</div>
+                              </div>
+                              <div className="actions"><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
                             </div>
-                            <div className="actions"><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
                           </div>
                         );
                       })}
                     </div>
                   </div>
                 ))}
-              </div>
-            </div>
-
-            <div style={{display:'grid', gap:'16px'}}>
-              <div className="panel">
-                <div className="title"><h2>Legend</h2></div>
-                <div className="list">
-                  {legendAgents.length ? legendAgents.map(name => {
-                    const meta = getAgentMeta(name);
-                    const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (name.slice(0,1).toUpperCase());
-                    return (
-                      <div key={name} className="chip" title={name}>
-                        <span className="dot" style={{background: meta.color}}></span>
-                        <span style={{marginRight:6}}>{name}</span>
-                        <span className="avatar" style={{background: meta.color}}>{letter}</span>
-                      </div>
-                    );
-                  }) : <div className="mono" style={{opacity:.7}}>Legend appears after start</div>}
-                </div>
-              </div>
-              <div className="panel">
-                <div className="title"><h2>Graveyard</h2></div>
-                <div className="list" style={{maxHeight:'180px', overflow:'auto'}}>
-                  {dead.length ? dead.map(n => {
-                    const meta = getAgentMeta(n);
-                    return <div key={n} className="chip dead"><span className="dot" style={{background: meta.color}}></span>💀 {n}</div>
-                  }) : <div className="mono" style={{opacity:.7}}>No deaths yet</div>}
-                </div>
-              </div>
-              <div className="panel">
-                <div className="title"><h2>Private Chats</h2></div>
-                <div>
-                  <div className="row" style={{justifyContent:'space-between'}}>
-                    <h3 style={{margin:'4px 0', fontSize:'13px', color:'#c7d2fe'}}>Mafia</h3>
-                    <div className="mono" style={{opacity:.9}}>Night remaining: {mafiaStatus.remaining_s}s</div>
-                  </div>
-                  <div className="list" style={{marginBottom:8}}>
-                    {mafiaStatus.mafia.map(name => {
-                      const meta = getAgentMeta(name);
-                      const vote = mafiaStatus.votes?.[name];
-                      const kill = mafiaStatus.kills?.[name];
-                      const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (name.slice(0,1).toUpperCase());
-                      return (
-                        <div key={name} className="chip" title={vote || kill ? `VOTE:${vote||'-'} KILL:${kill||'-'}` : ''}>
-                          <span className="dot" style={{background: meta.color}}></span>
-                          <span>{name}</span>
-                          {vote && <span className="model mono">V:{vote}</span>}
-                          {kill && <span className="model mono" style={{color:'#fca5a5'}}>K:{kill}</span>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {(() => {
-                    const alive = mafiaStatus.alive_mafia || [];
-                    const kills = mafiaStatus.kills || {};
-                    if (alive.length && alive.every(n => n in kills)) {
-                      const set = new Set(alive.map(n => kills[n]));
-                      if (set.size === 1) {
-                        const target = [...set][0];
-                        return <div className="mono" style={{color:'#86efac', marginBottom:8}}>Agreed target: <strong>{target}</strong></div>;
-                      }
-                    }
-                    return null;
-                  })()}
-                  <div style={{display:'grid', gap:8}}>
-                    {priv.mafia.map((m,i)=>{
-                      const meta = getAgentMeta(m.agent);
-                      const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (m.agent.slice(0,1).toUpperCase());
-                      return (
-                        <div key={i} className="msg">
-                          <div className="agent"><span className="avatar" style={{background: meta.color}}>{letter}</span><span>{m.agent}</span></div>
-                          <div className="bubble">{m.text}</div>
-                      <div className="actions"><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
-                        </div>
-                      );
-                    })}
-                    {(!priv.mafia || priv.mafia.length===0) && <div className="mono" style={{opacity:.7}}>No messages yet</div>}
-                  </div>
-                  {adminMode && (
-                    <>
-                      <h3 style={{margin:'10px 0 4px', fontSize:'13px', color:'#c7d2fe'}}>Detective</h3>
-                      <div style={{display:'grid', gap:8}}>
-                        {(priv.detective||[]).map((m,i)=>{
-                          const meta = getAgentMeta(m.agent);
-                          const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (m.agent.slice(0,1).toUpperCase());
-                          return (
-                            <div key={i} className="msg">
-                              <div className="agent"><span className="avatar" style={{background: meta.color}}>{letter}</span><span>{m.agent}</span></div>
-                              <div className="bubble">{m.text}</div>
-                              <div><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
-                            </div>
-                          );
-                        })}
-                        {(!priv.detective || priv.detective.length===0) && <div className="mono" style={{opacity:.7}}>No messages yet</div>}
-                      </div>
-                      <h3 style={{margin:'10px 0 4px', fontSize:'13px', color:'#c7d2fe'}}>Doctor</h3>
-                      <div style={{display:'grid', gap:8}}>
-                        {(priv.doctor||[]).map((m,i)=>{
-                          const meta = getAgentMeta(m.agent);
-                          const letter = (meta.emoji && meta.emoji.length<=2) ? meta.emoji : (m.agent.slice(0,1).toUpperCase());
-                          return (
-                            <div key={i} className="msg">
-                              <div className="agent"><span className="avatar" style={{background: meta.color}}>{letter}</span><span>{m.agent}</span></div>
-                              <div className="bubble">{m.text}</div>
-                              <div><button className="btn" onClick={()=>enqueueSpeak(m.text, m.agent)}>Speak</button></div>
-                            </div>
-                          );
-                        })}
-                        {(!priv.doctor || priv.doctor.length===0) && <div className="mono" style={{opacity:.7}}>No messages yet</div>}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-              <div className="panel">
-                <div className="title"><h2>Speech</h2></div>
-                <div className="row">
-                  <label>Upload audio<br/><input type="file" onChange={e=>setAsrFile(e.target.files?.[0]||null)} /></label>
-                  <button className="btn" onClick={doTranscribe}>Transcribe</button>
-                </div>
-                <pre>{asr ? JSON.stringify(asr, null, 2) : 'ASR result will appear here'}</pre>
-                <div className="row">
-                  <label>Say text<br/><input type="text" value={ttsText} onChange={e=>setTtsText(e.target.value)} /></label>
-                  <button className="btn" onClick={()=>enqueueSpeak(ttsText)}>Speak</button>
-                </div>
               </div>
             </div>
           </div>

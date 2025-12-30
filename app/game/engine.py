@@ -156,6 +156,8 @@ class GameEngine:
         m = re.search(r"kill\s*:?\s*([^\n\r,.;!]+)", lower)
         if m:
             seg = m.group(1).strip().strip("'\" ")
+            # remove stray non-alnum except hyphen/underscore/space
+            seg = re.sub(r"[^a-z0-9\-_ ]", "", seg)
             for name in alive_list:
                 nl = name.lower()
                 if (seg == nl or seg in nl or nl in seg) and self.roles.get(name).role != "mafia":

@@ -143,6 +143,26 @@ async def send_cycle(websocket: WebSocket, rounds: int = 3) -> None:
                 "tally": current_tally,
                 "threshold": threshold,
             })
+            # Check win conditions after day resolution
+            alive = engine.alive_players()
+            mafia_alive = engine.alive_mafia_names()
+            town_alive_count = len(alive) - len(mafia_alive)
+            winner = None
+            reason = None
+            if len(mafia_alive) == 0:
+                winner, reason = "town", "all_mafia_eliminated"
+            elif town_alive_count <= len(mafia_alive):
+                winner, reason = "mafia", "mafia_reached_parity"
+            if winner:
+                await websocket.send_json({
+                    "type": "game_over",
+                    "winner": winner,
+                    "reason": reason,
+                    "mafia_alive": mafia_alive,
+                    "alive": alive,
+                })
+                await websocket.send_json({"type": "done"})
+                return
         else:
             # Night: mafia private chat window (30s), then a kill
             engine.start_night()
@@ -239,6 +259,26 @@ async def send_cycle(websocket: WebSocket, rounds: int = 3) -> None:
             await websocket.send_json({"type": "event", "name": "night_result", "victim": victim})
             if saved:
                 await websocket.send_json({"type": "event", "name": "night_saved", "target": engine.doctor_target})
+            # Check win conditions after night resolution
+            alive = engine.alive_players()
+            mafia_alive = engine.alive_mafia_names()
+            town_alive_count = len(alive) - len(mafia_alive)
+            winner = None
+            reason = None
+            if len(mafia_alive) == 0:
+                winner, reason = "town", "all_mafia_eliminated"
+            elif town_alive_count <= len(mafia_alive):
+                winner, reason = "mafia", "mafia_reached_parity"
+            if winner:
+                await websocket.send_json({
+                    "type": "game_over",
+                    "winner": winner,
+                    "reason": reason,
+                    "mafia_alive": mafia_alive,
+                    "alive": alive,
+                })
+                await websocket.send_json({"type": "done"})
+                return
         await asyncio.sleep(0.15)
     await websocket.send_json({"type": "done"})
 
